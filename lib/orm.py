@@ -123,8 +123,6 @@ class Model(metaclass=ModelMeta):
 
     @classmethod
     def _get_table_name(cls):
-        if cls._table_name:
-            return cls._table_name
         return camel_to_snake_case(cls.__name__)
 
     @classmethod
