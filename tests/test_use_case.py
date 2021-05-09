@@ -18,7 +18,7 @@ db.create_tables([Advert])
 
 
 def test_use_case():
-    Advert.create(title="iPhone X", price=100)
-    adverts = Advert.select()
+    Advert.objects.create(title="iPhone X", price=100)
+    adverts = Advert.objects.select()
 
     assert str(adverts[0]) == "iPhone X | 100"

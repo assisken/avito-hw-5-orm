@@ -1,3 +1,5 @@
+from typing import List
+
 import pytest
 
 from lib import orm
@@ -35,11 +37,11 @@ def test_insert_some_data(init_table):
 
 def test_create(init_table):
     cur = init_table.cursor()
-    amadeus = SimpleModel.create(name="Amadeus", age=24)
+    amadeus = SimpleModel.objects.create(name="Amadeus", age=24)
     records = cur.execute("select * from simple_model").fetchall()
 
     assert records == [("Amadeus", 24)]
-    assert amadeus == orm.Row(name="Amadeus", age=24)
+    assert amadeus == SimpleModel(name="Amadeus", age=24)
 
 
 def test_select(init_table):
@@ -48,15 +50,13 @@ def test_select(init_table):
         "insert into simple_model values (?, ?), (?, ?), (?, ?)",
         ("Amadeus", 24, "August", 33, "Amadeus", 36),
     )
-    amadeuses = []
-    for amad in SimpleModel.select(name="Amadeus"):
-        amadeuses.append(amad)
+    amadeuses: List[SimpleModel] = SimpleModel.objects.select(name="Amadeus")
 
     assert amadeuses[0].age == 24
     assert amadeuses[1].age == 36
     assert amadeuses == [
-        orm.Row(name="Amadeus", age=24),
-        orm.Row(name="Amadeus", age=36),
+        SimpleModel(name="Amadeus", age=24),
+        SimpleModel(name="Amadeus", age=36),
     ]
 
 
@@ -73,7 +73,7 @@ def test_validation(name, age, init_table):
     cur.execute('insert into simple_model values (?, ?)', (name, age))
 
     with pytest.raises(orm.ValidationError):
-        SimpleModel.create(name=name, age=age)
+        SimpleModel.objects.create(name=name, age=age)
 
     with pytest.raises(orm.ValidationError):
-        SimpleModel.select(age=age)
+        SimpleModel.objects.select(age=age)

@@ -31,7 +31,7 @@ class Database:
             for model in models:
                 table_fields = ",".join(
                     f"{name} {field_type.sql_type}"
-                    for name, field_type in model._get_fields().items()
+                    for name, field_type in model._get_model_fields().items()
                 )
 
                 # 1. I think it's safe.
@@ -41,25 +41,6 @@ class Database:
                     "create table if not exists "
                     f"{model._get_table_name()}({table_fields})"
                 )
-
-
-class Row:
-    def __init__(self, **kwargs):
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-
-    def __repr__(self):
-        fields = ", ".join(f"{k}={v}" for k, v in self.__get_fields().items())
-        return f"{type(self).__name__}({fields})"
-
-    def __str__(self):
-        return ' | '.join(str(v) for _, v in self.__get_fields().items())
-
-    def __eq__(self, other: "Row"):
-        return self.__get_fields() == other.__get_fields()
-
-    def __get_fields(self) -> Dict[str, Any]:
-        return {k: v for k, v in self.__dict__.items() if not k.startswith("_")}
 
 
 class Field(ABC):
@@ -83,61 +64,89 @@ class Field(ABC):
                 )
 
 
+class ModelManager:
+    def __init__(self, model: Type["Model"]):
+        self.model = model
+
+    def create(self, **fields) -> Type["Model"]:
+        self._validate_fields(**fields)
+
+        row = tuple(value for _, value in fields.items())
+        values = ",".join("?" for _ in range(len(row)))
+
+        self.model.Meta.database._con.execute(
+            f"insert into {self.model._get_table_name()} values ({values})", row
+        )
+        return self.model(**fields)
+
+    def select(self, **fields) -> list:
+        def make_row(row):
+            init_fields = {field: row for field, row in zip(self.model._get_model_fields(), row)}
+            self._validate_fields(**init_fields)
+            return self.model(**init_fields)
+
+        cond = "and ".join(f"{f}='{v}'" for f, v in fields.items())
+        where = f'where {cond}' if fields else ''
+        rows = self.model.Meta.database._con.execute(
+            f"select * from {self.model._get_table_name()} {where}"
+        )
+        return [make_row(row) for row in rows]
+
+    def _validate_fields(self, **fields):
+        model_fields = self.model._get_model_fields()
+        for field_name, value in fields.items():
+            model_fields[field_name].validate(value)
+
+
 class Meta:
     pass
 
 
 class ModelMeta(type):
     def __new__(mcs, name, bases, attrs):
-        meta = first(base.Meta for base in bases if hasattr(base, 'Meta'))
-        attrs['Meta'] = attrs.get('Meta') or meta or Meta()
-        return type.__new__(mcs, name, bases, attrs)
+        attrs['Meta'] = attrs.get('Meta') or mcs.get_parent_attribute('Meta', bases) or Meta()
+
+        _class: Type["Model"] = super().__new__(mcs, name, bases, attrs)
+        _class.objects = attrs.get('objects') or ModelManager(_class)
+
+        return _class
+
+    @staticmethod
+    def get_parent_attribute(attr: str, bases) -> Any:
+        return first(getattr(base, attr) for base in bases if hasattr(base, 'Meta'))
 
 
 class Model(metaclass=ModelMeta):
-    _table_name = ""
+    objects: "ModelManager"
 
-    @classmethod
-    def create(cls, **fields) -> "Model":
-        cls._validate_fields(**fields)
-        row = tuple(value for _, value in fields.items())
-        values = ",".join("?" for _ in range(len(row)))
-        cls.Meta.database._con.execute(
-            f"insert into {cls._get_table_name()} values ({values})", row
-        )
-        return Row(**fields)
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
 
-    @classmethod
-    def select(cls, **fields) -> List["Model"]:
-        def make_row(row):
-            init_fields = {field: row for field, row in zip(cls._get_fields(), row)}
-            cls._validate_fields(**init_fields)
-            return Row(**init_fields)
+    def __repr__(self):
+        fields = ", ".join(f"{k}={v}" for k, v in self._get_instance_fields().items())
+        return f"{type(self).__name__}({fields})"
 
-        cond = "and ".join(f"{f}='{v}'" for f, v in fields.items())
-        where = f'where {cond}' if fields else ''
-        rows = cls.Meta.database._con.execute(
-            f"select * from {cls._get_table_name()} {where}"
-        )
-        return [make_row(row) for row in rows]
+    def __str__(self):
+        return ' | '.join(str(v) for _, v in self._get_instance_fields().items())
+
+    def __eq__(self, other: "Model"):
+        return self._get_instance_fields() == other._get_instance_fields()
 
     @classmethod
     def _get_table_name(cls):
         return camel_to_snake_case(cls.__name__)
 
     @classmethod
-    def _get_fields(cls) -> Dict[str, Field]:
+    def _get_model_fields(cls) -> Dict[str, Field]:
         return {
             field_name: field
             for field_name, field in vars(cls).items()
             if not field_name.startswith("_") and isinstance(field, Field)
         }
 
-    @classmethod
-    def _validate_fields(cls, **fields):
-        model_fields = cls._get_fields()
-        for field_name, value in fields.items():
-            model_fields[field_name].validate(value)
+    def _get_instance_fields(self) -> Dict[str, Any]:
+        return {k: v for k, v in vars(self).items() if not k.startswith("_")}
 
 
 class ValidationError(Exception):
