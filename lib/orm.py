@@ -1,6 +1,6 @@
 import sqlite3
 from abc import ABC, abstractmethod
-from typing import Dict, List, Type, Optional, Any
+from typing import Dict, List, Type, Optional, Any, Callable
 
 from funcy import first
 
@@ -63,19 +63,24 @@ class Row:
 
 
 class Field(ABC):
+    @classmethod
+    def EMPTY_CHECK(cls):
+        return True
+
+    def __init__(self, **constraints: Callable[[Any], bool]):
+        self._constraints = constraints
+
     @property
     @abstractmethod
     def sql_type(self) -> str:
         pass
 
-    def __get__(self, instance, owner=None):
-        return self._data
-
-    def __set__(self, instance, value):
-        self._data = value
-
-    def __repr__(self):
-        return str(self._data)
+    def validate(self, data):
+        for constraint, check in self._constraints.items():
+            if not check(data):
+                raise ValidationError(
+                    f'Constraint mismatch: {type(self).__name__} {constraint} for value "{data}"'
+                )
 
 
 class Meta:
@@ -93,13 +98,8 @@ class Model(metaclass=ModelMeta):
     _table_name = ""
 
     @classmethod
-    def _get_table_name(cls):
-        if cls._table_name:
-            return cls._table_name
-        return camel_to_snake_case(cls.__name__)
-
-    @classmethod
     def create(cls, **fields) -> "Model":
+        cls._validate_fields(**fields)
         row = tuple(value for _, value in fields.items())
         values = ",".join("?" for _ in range(len(row)))
         cls.Meta.database._con.execute(
@@ -111,6 +111,7 @@ class Model(metaclass=ModelMeta):
     def select(cls, **fields) -> List["Model"]:
         def make_row(row):
             init_fields = {field: row for field, row in zip(cls._get_fields(), row)}
+            cls._validate_fields(**init_fields)
             return Row(**init_fields)
 
         cond = "and ".join(f"{f}='{v}'" for f, v in fields.items())
@@ -121,6 +122,12 @@ class Model(metaclass=ModelMeta):
         return [make_row(row) for row in rows]
 
     @classmethod
+    def _get_table_name(cls):
+        if cls._table_name:
+            return cls._table_name
+        return camel_to_snake_case(cls.__name__)
+
+    @classmethod
     def _get_fields(cls) -> Dict[str, Field]:
         return {
             field_name: field
@@ -128,16 +135,31 @@ class Model(metaclass=ModelMeta):
             if not field_name.startswith("_") and isinstance(field, Field)
         }
 
+    @classmethod
+    def _validate_fields(cls, **fields):
+        model_fields = cls._get_fields()
+        for field_name, value in fields.items():
+            model_fields[field_name].validate(value)
+
+
+class ValidationError(Exception):
+    pass
+
 
 class IntegerField(Field):
     sql_type = "integer"
 
     def __init__(self, min_value: Optional[int] = None):
-        pass
+        super().__init__(
+            min_value=lambda data: min_value <= data if min_value is not None else self.EMPTY_CHECK,
+        )
 
 
 class CharField(Field):
     sql_type = "text"
 
     def __init__(self, max_length: Optional[int] = None, min_length: Optional[int] = None):
-        pass
+        super().__init__(
+            min_length=lambda data: min_length <= len(data) if min_length is not None else self.EMPTY_CHECK,
+            max_length=lambda data: len(data) <= max_length if max_length is not None else self.EMPTY_CHECK,
+        )

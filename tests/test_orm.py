@@ -1,10 +1,12 @@
+import pytest
+
 from lib import orm
 from pytest import fixture
 
 
 class SimpleModel(orm.Model):
-    name: str = orm.CharField()
-    age: int = orm.IntegerField()
+    name: str = orm.CharField(min_length=1, max_length=100)
+    age: int = orm.IntegerField(min_value=0)
 
 
 @fixture
@@ -58,9 +60,20 @@ def test_select(init_table):
     ]
 
 
-# def test_char_max_length(create_tables: sqlite3.Connection):
-#     raise NotImplementedError
-#
-#
-# def test_integer_min_value(create_tables: sqlite3.Connection):
-#     raise NotImplementedError
+@pytest.mark.parametrize(
+    'name, age',
+    [
+        ('', 1),
+        ('a' * 101, 1),
+        ('Amadeus' * 101, 0),
+    ]
+)
+def test_validation(name, age, init_table):
+    cur = init_table.cursor()
+    cur.execute('insert into simple_model values (?, ?)', (name, age))
+
+    with pytest.raises(orm.ValidationError):
+        SimpleModel.create(name=name, age=age)
+
+    with pytest.raises(orm.ValidationError):
+        SimpleModel.select(age=age)
