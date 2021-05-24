@@ -10,15 +10,7 @@ from .util import camel_to_snake_case
 class Database:
     def __init__(self, database_name: str):
         self.database_name = database_name
-        self.__con = None
-
-    @property
-    def _con(self) -> sqlite3.Connection:
-        return self.__con
-
-    @_con.setter
-    def _con(self, value: sqlite3.Connection):
-        self.__con = value
+        self._con = None
 
     def connect(self):
         self._con = sqlite3.Connection(self.database_name)
